@@ -149,7 +149,7 @@ class Web404Check {
      * 过滤已检测链接
      */
     function filterUrls($urls) {
-        $urls = array_diff($urls, $this->urls);
+        $urls = array_unique(array_diff($urls, $this->urls));
         
         if(count($urls)) {
             $this->urls = array_merge($this->urls, $urls);
