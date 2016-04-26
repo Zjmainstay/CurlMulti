@@ -10,7 +10,10 @@
   "autoload" : {
     "psr-4" : {
       "Ares333\\CurlMulti\\" : [ "src" ]
-    }
+    },
+    "files" : [
+        "src/phpQuery.php"
+    ]
   },
   "authors" : [ {
     "name" : "Ares",
