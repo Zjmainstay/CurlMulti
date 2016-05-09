@@ -260,6 +260,7 @@ class WebClone {
         $content = preg_replace('#(<(?:img|link|script)[^>]*?(?:src|href)\s*=\s*["\']?)https?://[^/"\']+#is', '$1', $content);  //移除js/css跟域名（外网）
         $content = preg_replace('#((?:src|href)\s*=\s*["\']?)/#is', '$1' . str_repeat('../', $this->getLevelToBaseUrl($param['url'])), $content);    //移除以/开头的/
         $content = preg_replace('#href=(["\'])\1#is', 'href="index.html"', $content);
+        $content .= "<!-- CurrentUrl: {$param['url']}, FromUrl: {$param['fromUrl']} -->";
         //文件补全.html
         $html = phpQuery::newDocumentHTML ( $content );
         $list = $html['a,img,link,script'];
@@ -272,7 +273,8 @@ class WebClone {
 
             if(!preg_match('#\.(html|js|css|jpg|png|jpeg|gif|ico)$#is', $link)) {
                 $linkQuote = preg_quote($link, '#');
-                $content = preg_replace("#(?:src|href)\s*=\s*[\"']?\s*{$linkQuote}#is", '$0.html', $content);
+                
+                $content = preg_replace("#((?:src|href)\s*=\s*([\"'])?\s*{$linkQuote})\\2#is", '$1.html$2', $content);
             }
         }
         phpQuery::unloadDocuments();
