@@ -22,6 +22,7 @@ class WebClone {
             CURLOPT_SSL_VERIFYPEER  => false,
             CURLOPT_SSL_VERIFYPEER  => false,
             CURLOPT_RETURNTRANSFER  => true,
+            CURLOPT_FOLLOWLOCATION  => true,
         );
         $this->urls[] = rtrim($url, '/');
         $uri = parse_url($url);
@@ -46,6 +47,7 @@ class WebClone {
      * 添加一个新页面
      */
     function addUrl($url, $fromUrl, $callback = false) {
+        #echo "{$url} from {$fromUrl}\n";
         if(empty($callback)) {
             $callback = array ($this,'handlePageResult');
         }
@@ -55,7 +57,7 @@ class WebClone {
                     // 这个参数可以一直传递下去
                     'url' => $url, 
                     'fromUrl' => $fromUrl, 
-                ) 
+                )
         ), $callback );
 
         try {
@@ -72,7 +74,7 @@ class WebClone {
      */
     function handlePageResult($r, $param) {
         if (! $this->httpError ( $r ['info'] )) {
-            $pathInfo = $this->parseUrlToPath($param['url']);
+            $pathInfo = $this->parseUrlToPath($param['url'], $param['fromUrl']);
             if(!empty($pathInfo)) {
                 $this->cacheFile($pathInfo, $r['content'], $param);
             }
@@ -81,7 +83,7 @@ class WebClone {
             
             $this->parsePageLink($r, $param);
         } else {
-            echo "Error Link: {$param['url']}\n";
+            echo "Error Link: {$param['url']} from {$param['fromUrl']}\n";
         }
     }
 
@@ -95,12 +97,12 @@ class WebClone {
             if(preg_match('#https?://[^/]+#is', $param['url'], $match)) {
                 $url = str_replace($match[0], '', $param['url']);    //移除链接
             }
-            $pathInfo = $this->parseUrlToPath($url);
+            $pathInfo = $this->parseUrlToPath($url, $param['fromUrl']);
             if(!empty($pathInfo)) {
                 $this->cacheFile($pathInfo, $r['content'], $param);
             }
         } else {
-            echo "Error Link: {$param['url']}\n";
+            echo "Error Link: {$param['url']} from {$param['fromUrl']}\n";
         }
     }
 
@@ -160,7 +162,7 @@ class WebClone {
         $urls = array();
         foreach ( $list as $v ) {
             $v = pq ( $v );
-            $url = $this->renderUrl($v->attr ( 'href' ));
+            $url = $this->renderUrl($v->attr ( 'href' ), $param['url']);
             if(!empty($url)) $urls[] = $url;
         }
         $urls = $this->filterUrls($urls);
@@ -188,10 +190,11 @@ class WebClone {
         $urls = array();
         foreach ( $list as $v ) {
             $v = pq ( $v );
-            $url = $this->renderUrl($v->attr ( 'href' ), false);
+            $url = $this->renderUrl($v->attr ( 'href' ), $param['url'], false);
             if(!empty($url)) $urls[] = $url;
         }
         $urls = $this->filterUrls($urls);
+
         foreach ( $urls as $url ) {
             $this->addUrl($url, $param['url'], array($this, 'handleAssetsResult'));
         }
@@ -202,7 +205,7 @@ class WebClone {
         foreach ( $list as $v ) {
             $v = pq ( $v );
             if(empty($v->attr ( 'src' ))) continue;
-            $url = $this->renderUrl($v->attr ( 'src' ), false);
+            $url = $this->renderUrl($v->attr ( 'src' ), $param['url'], false);
             if(!empty($url)) $urls[] = $url;
         }
         $urls = $this->filterUrls($urls);
@@ -216,7 +219,7 @@ class WebClone {
         foreach ( $list as $v ) {
             $v = pq ( $v );
             if(empty($v->attr ( 'src' ))) continue;
-            $url = $this->renderUrl($v->attr ( 'src' ), false);
+            $url = $this->renderUrl($v->attr ( 'src' ), $param['url'], false);
             if(!empty($url)) $urls[] = $url;
         }
         $urls = $this->filterUrls($urls);
@@ -229,20 +232,54 @@ class WebClone {
     
     /**
      * 链接解析处理
+     * @param $url      当前链接
+     * @param $fromUrl  来源链接（如果是相对路径，这个来源链接起到关键作用）
+     * @param $skipOutsideLink 跳过外网链接
      */
-    function renderUrl($url, $skipOutsideLink = true) {
+    function renderUrl($url, $fromUrl, $skipOutsideLink = true) {
         $url = preg_replace('/#[^"]+$/', '', trim($url));
         if(!preg_match('#https?://#is', $url)) {
+            if(substr($url, 0, 1) !== '/') {
+                $fromUrl = preg_replace('/#.*$/', '', $fromUrl);
+                $fromUrl = preg_replace('/\?.*$/', '', $fromUrl);
+                $refferUrl = preg_replace('#(https?://.+)/[^/]+\.[^/]+$#is', '$1', $fromUrl);
+            } else {
+                $refferUrl = $this->baseUrl;
+            }
+
             if(($url == '#') || (stripos($url, 'mailto:') !== false) || (stripos($url, 'javascript:') !== false)) {
                 return false;
             }
             
-            $url = $this->baseUrl . '/' . trim($url, '/');
+            $url = $refferUrl . '/' . trim($url, '/');
+            $url = $this->renderRealUrl($url);
         } else if((stripos($url, $this->baseUrl) === false) && $skipOutsideLink) {    //外链不加载
             return false;
         }
-        
+
         return rtrim($url, '/');
+    }
+
+    /**
+     * 处理相对路径，得到绝对路径
+     */
+    function renderRealUrl($url) {
+        if(stripos($url, '../') !== false) {
+            $arr = explode('/', $url);
+
+            $newArr = [];
+            foreach($arr as $val) {
+                if('..' === $val) {
+                    array_pop($newArr);
+                } else {
+                    array_push($newArr, $val);
+                }
+            }
+
+            $url = implode('/', $newArr);
+        }
+
+        return $url;
     }
     
     /**
@@ -277,8 +314,8 @@ class WebClone {
     /**
      * 解析url为路径
      */
-    function parseUrlToPath($url) {
-        $url = $this->renderUrl($url);
+    function parseUrlToPath($url, $fromUrl) {
+        $url = $this->renderUrl($url, $fromUrl);
 
         $url = str_replace($this->baseUrl, '', $url);
 
