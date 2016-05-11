@@ -115,16 +115,16 @@ class WebClone {
             }
 
             if(isset($param['type']) && ($param['type'] === 'css')){
-                if(preg_match_all ( '/@import\s+url\s*\((.+)\);/iU', $r['content'], $matches )) {
+                if(preg_match_all ( '/@import\s+url\s*\(\s*(["\'])?(.+)\\1\s*\);/iU', $r['content'], $matches )) {
                     $urls = array();
-                    foreach ( $matches[1] as $cssUrl ) {
+                    foreach ( $matches[2] as $cssUrl ) {
                         $cssUrl = $this->renderUrl($cssUrl, $param['url'], false);
                         if(!empty($cssUrl)) $urls[] = $cssUrl;
                     }
                     $this->addAssetsUrl($urls, $param['url'], array('type' => 'css'));
                 }
 
-                if(preg_match_all ( '/:\s*url\s*\(\s*(\'|")?(.+?)\\1?\s*\)/i', $r['content'], $matches )) {
+                if(preg_match_all ( '/:\s*url\s*\(\s*(["\'])?(.+?)\\1\s*\)/i', $r['content'], $matches )) {
                     $urls = array();
                     foreach ( $matches[2] as $cssUrl ) {
                         $cssUrl = $this->renderUrl($cssUrl, $param['url'], false);
@@ -290,13 +290,20 @@ class WebClone {
      */
     function renderUrl($url, $fromUrl, $skipOutsideLink = true) {
         $url = preg_replace('/#[^"]+$/', '', trim($url));
+        if((stripos($url, ' ') !== false) || (stripos($url, '+') !== false) ) { //url中的空格处理
+            $url = str_replace(array(' ', '+'), rawurlencode(' '), $url);
+        }
         if(!preg_match('#https?://#is', $url)) {
             if(substr($url, 0, 1) !== '/') {
                 $fromUrl = preg_replace('/#.*$/', '', $fromUrl);
                 $fromUrl = preg_replace('/\?.*$/', '', $fromUrl);
                 $refferUrl = preg_replace('#(https?://.+)/[^/]+\.[^/]+$#is', '$1', $fromUrl);
             } else {
-                $refferUrl = $this->baseUrl;
+                if(substr($url, 0, 2) === '//') {   //以//开头的绝对路径
+                    $refferUrl = 'http:/';  //http:/ + / + url;
+                } else {
+                    $refferUrl = $this->baseUrl;
+                }
             }
 
             if(($url == '#') || (stripos($url, 'mailto:') !== false) || (stripos($url, 'javascript:') !== false) || (stripos($url, 'data:image') !== false)) {
@@ -448,12 +455,13 @@ class WebClone {
 }
 
 if(empty($argv[1]) || !preg_match('#^https?://#is', $argv[1])) {
-    echo "Usage: php webClone.php http://www.zjmainstay.cn \n";
+    echo "Usage: php webClone.php http://www.zjmainstay.cn [parseAllPage=0]\n";
     exit;
 }
 
 $demo = new WebClone();
-$demo->setParseAllPage(true);    //设置全站采集标记
+$parseAllPage = empty($argv[2]) ? 0 : $argv[2];
+$demo->setParseAllPage($parseAllPage);    //设置全站采集标记
 $demo->setBaseStorageDir(__DIR__ . '/domains');
 $demo->run($argv[1]);
 print_r($demo->getUrls());
