@@ -12,6 +12,7 @@ class WebClone {
     protected $emptyLink      = 0;
     protected $maxEmptyLink   = 50;     //最大空链次数
     protected $parseAllPage   = false;  //抓取全站标记 true:抓取全站   false:不抓取全站
+    protected $parseOutsiteLink = false;  //抓取外链标记 true:抓取外链   false:不抓取外链
 
     /**
      * 从这里开始抓取
@@ -115,10 +116,11 @@ class WebClone {
             }
 
             if(isset($param['type']) && ($param['type'] === 'css')){
+                $parseOutsiteLink = true;   //js/css加载外链
                 if(preg_match_all ( '/@import\s+url\s*\(\s*(["\'])?(.+)\\1\s*\);/iU', $r['content'], $matches )) {
                     $urls = array();
                     foreach ( $matches[2] as $cssUrl ) {
-                        $cssUrl = $this->renderUrl($cssUrl, $param['url'], false);
+                        $cssUrl = $this->renderUrl($cssUrl, $param['url'], $parseOutsiteLink);
                         if(!empty($cssUrl)) $urls[] = $cssUrl;
                     }
                     $this->addAssetsUrl($urls, $param['url'], array('type' => 'css'));
@@ -127,7 +129,7 @@ class WebClone {
                 if(preg_match_all ( '/:\s*url\s*\(\s*(["\'])?(.+?)\\1\s*\)/i', $r['content'], $matches )) {
                     $urls = array();
                     foreach ( $matches[2] as $cssUrl ) {
-                        $cssUrl = $this->renderUrl($cssUrl, $param['url'], false);
+                        $cssUrl = $this->renderUrl($cssUrl, $param['url'], $parseOutsiteLink);
                         if(!empty($cssUrl)) $urls[] = $cssUrl;
                     }
                     $this->addAssetsUrl($urls, $param['url'], array('type' => 'css'));
@@ -155,7 +157,7 @@ class WebClone {
         $urls = array();
         foreach ( $list as $v ) {
             $v = pq ( $v );
-            $url = $this->renderUrl($v->attr ( 'href' ), $param['url']);
+            $url = $this->renderUrl($v->attr ( 'href' ), $param['url'], $this->parseOutsiteLink);
             if(!empty($url)) $urls[] = $url;
         }
         $urls = $this->filterUrls($urls);
@@ -181,12 +183,14 @@ class WebClone {
 
         $html = phpQuery::newDocumentHTML ( $r ['content'] );
 
+        $parseOutsiteLink = true;   //js/css/img加载外链
+
         //CSS
         $list = $html ['link'];
         $urls = array();
         foreach ( $list as $v ) {
             $v = pq ( $v );
-            $url = $this->renderUrl($v->attr ( 'href' ), $param['url'], false);
+            $url = $this->renderUrl($v->attr ( 'href' ), $param['url'], $parseOutsiteLink);
             if(!empty($url)) $urls[] = $url;
         }
         $this->addAssetsUrl($urls, $param['url'], array('type' => 'css'));
@@ -197,7 +201,7 @@ class WebClone {
         foreach ( $list as $v ) {
             $v = pq ( $v );
             if(empty($v->attr ( 'src' ))) continue;
-            $url = $this->renderUrl($v->attr ( 'src' ), $param['url'], false);
+            $url = $this->renderUrl($v->attr ( 'src' ), $param['url'], $parseOutsiteLink);
             if(!empty($url)) $urls[] = $url;
         }
         $this->addAssetsUrl($urls, $param['url'], array('type' => 'js'));
@@ -208,7 +212,7 @@ class WebClone {
         foreach ( $list as $v ) {
             $v = pq ( $v );
             if(empty($v->attr ( 'src' ))) continue;
-            $url = $this->renderUrl($v->attr ( 'src' ), $param['url'], false);
+            $url = $this->renderUrl($v->attr ( 'src' ), $param['url'], $parseOutsiteLink);
             if(!empty($url)) $urls[] = $url;
         }
         $this->addAssetsUrl($urls, $param['url'], array('type' => 'img'));
@@ -255,10 +259,11 @@ class WebClone {
      * 内容处理，移除base标签，移除绝对路径（含/开头的路径）
      */
     function renderContent($content, $param) {
+        $currentBaseUrl = $this->parseBaseUrl($param['url'], $param['fromUrl']);
         $content = preg_replace('#<base [^>]*>#is', '', $content);  //移除base标签
-        $content = str_replace($this->baseUrl, '', $content);   //移除根域名
+        $content = str_replace($currentBaseUrl, '', $content);   //移除根域名
         $content = preg_replace('#(<(?:img|link|script)[^>]*?(?:src|href)\s*=\s*["\']?)https?://[^/"\']+#is', '$1', $content);  //移除js/css跟域名（外网）
-        $content = preg_replace('#((?:src|href)\s*=\s*["\']?)/#is', '$1' . str_repeat('../', $this->getLevelToBaseUrl($param['url'])), $content);    //移除以/开头的/
+        $content = preg_replace('#((?:src|href)\s*=\s*["\']?)/#is', '$1' . str_repeat('../', $this->getLevelToBaseUrl($param['url'], $currentBaseUrl)), $content);    //移除以/开头的/
         $content = preg_replace('#href=(["\'])\1#is', 'href="index.html"', $content);
         $content .= "<!-- CurrentUrl: {$param['url']}, FromUrl: {$param['fromUrl']} -->";
         //文件补全.html
@@ -286,23 +291,25 @@ class WebClone {
      * 链接解析处理
      * @param $url      当前链接
      * @param $fromUrl  来源链接（如果是相对路径，这个来源链接起到关键作用）
-     * @param $skipOutsideLink 跳过外网链接
+     * @param $parseOutsideLink 外网链接是否解析
      */
-    function renderUrl($url, $fromUrl, $skipOutsideLink = true) {
+    function renderUrl($url, $fromUrl, $parseOutsideLink = false) {
         $url = preg_replace('/#[^"]+$/', '', trim($url));
         if((stripos($url, ' ') !== false) || (stripos($url, '+') !== false) ) { //url中的空格处理
             $url = str_replace(array(' ', '+'), rawurlencode(' '), $url);
         }
+
         if(!preg_match('#https?://#is', $url)) {
+            $currentBaseUrl = $this->parseBaseUrl($url, $fromUrl);
             if(substr($url, 0, 1) !== '/') {
                 $fromUrl = preg_replace('/#.*$/', '', $fromUrl);
                 $fromUrl = preg_replace('/\?.*$/', '', $fromUrl);
-                $refferUrl = preg_replace('#(https?://.+)/[^/]+\.[^/]+$#is', '$1', $fromUrl);
+                $refferUrl = preg_replace('#(https?://.+(?::\d+)?)/[^/]+\.[^/]+$#is', '$1', $fromUrl);
             } else {
                 if(substr($url, 0, 2) === '//') {   //以//开头的绝对路径
                     $refferUrl = 'http:/';  //http:/ + / + url;
                 } else {
-                    $refferUrl = $this->baseUrl;
+                    $refferUrl = $currentBaseUrl;
                 }
             }
 
@@ -312,11 +319,25 @@ class WebClone {
             
             $url = $refferUrl . '/' . trim($url, '/');
             $url = $this->renderRealUrl($url);
-        } else if((stripos($url, $this->baseUrl) === false) && $skipOutsideLink) {    //外链不加载
+        } else if((stripos($url, $this->baseUrl) === false) && !$parseOutsideLink) {    //外链
             return false;
         }
 
+        var_dump(rtrim($url, '/'));
+
         return rtrim($url, '/');
+    }
+
+    function parseBaseUrl($url, $fromUrl) {
+        if(!preg_match('#https?://#is', $url)) {        //相对路径
+            $url = $fromUrl;
+        }
+        //从来源地址解析根域名
+        if(!preg_match('#https?://[^/]+(?::\d+)?#is', $url, $match)) {
+            return false;
+        }
+
+        return $match[0];
     }
 
     /**
@@ -374,12 +395,14 @@ class WebClone {
      * 解析url为路径
      */
     function parseUrlToPath($url, $fromUrl) {
-        $url = $this->renderUrl($url, $fromUrl);
+        $url = $this->renderUrl($url, $fromUrl, $this->parseOutsiteLink);
         if(empty($url)) {
             return false;
         }
 
-        $url = str_replace($this->baseUrl, '', $url);
+        $currentBaseUrl = $this->parseBaseUrl($url, $fromUrl);
+
+        $url = str_replace($currentBaseUrl, '', $url);
 
         $url = preg_replace('#\?.*$#i', '', $url);
 
@@ -394,7 +417,7 @@ class WebClone {
             $filename = 'index';
         }
 
-        $dirname  = rtrim($this->renderPath($this->parseBaseUrlToPath($match[1])), '/');
+        $dirname  = rtrim($this->renderPath($this->parseBaseUrlToPath($match[1], $currentBaseUrl)), '/');
 
         return array(
                 'filename'  => $filename,
@@ -406,8 +429,8 @@ class WebClone {
     /**
      * 解析url补充根路径
      */
-    function parseBaseUrlToPath($url) {
-        return $this->getBaseDir() . str_replace($this->baseUrl, '', $url);
+    function parseBaseUrlToPath($url, $baseUrl) {
+        return $this->getBaseDir($baseUrl) . str_replace($baseUrl, '', $url);
     }
 
     /**
@@ -420,12 +443,12 @@ class WebClone {
     /**
      * 项目存储根目录
      */
-    function getBaseDir() {
-        return $this->baseStorageDir . '/' . $this->renderPath($this->baseUrl);
+    function getBaseDir($baseUrl) {
+        return $this->baseStorageDir . '/' . $this->renderPath($baseUrl);
     }
 
-    function getLevelToBaseUrl($url) {
-        $subUrl = str_replace($this->baseUrl, '', $url);
+    function getLevelToBaseUrl($url, $baseUrl) {
+        $subUrl = str_replace($baseUrl, '', $url);
         $subUrlArr = explode('/', trim($subUrl, '/'));
         return max(0, count($subUrlArr) - 1);
     }
@@ -448,6 +471,10 @@ class WebClone {
         $this->parseAllPage = $flag;
     }
 
+    function setParseOutsiteLink($flag) {
+        $this->parseOutsiteLink = $flag;
+    }
+
     function getUrls() {
         return $this->urls;
     }
@@ -455,13 +482,15 @@ class WebClone {
 }
 
 if(empty($argv[1]) || !preg_match('#^https?://#is', $argv[1])) {
-    echo "Usage: php webClone.php http://www.zjmainstay.cn [parseAllPage=0]\n";
+    echo "Usage: php webClone.php http://www.zjmainstay.cn [parseAllPage=0] [outsiteLink=0]\n";
     exit;
 }
 
 $demo = new WebClone();
 $parseAllPage = empty($argv[2]) ? 0 : $argv[2];
-$demo->setParseAllPage($parseAllPage);    //设置全站采集标记
+$demo->setParseAllPage($parseAllPage);    //设置全站采集标记 1:采集全站 0:不采集全站（默认）
+$parseOutsiteLink = empty($argv[3]) ? 0 : $argv[3];
+$demo->setParseOutsiteLink($parseOutsiteLink);    //设置外链采集标记 1:采集外链 0:不采集外链（默认）
 $demo->setBaseStorageDir(__DIR__ . '/domains');
 $demo->run($argv[1]);
 print_r($demo->getUrls());
