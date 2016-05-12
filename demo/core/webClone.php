@@ -323,8 +323,6 @@ class WebClone {
             return false;
         }
 
-        var_dump(rtrim($url, '/'));
-
         return rtrim($url, '/');
     }
 
@@ -437,6 +435,9 @@ class WebClone {
      * 设置存储根目录（不含站点本身目录）
      */
     function setBaseStorageDir($dir) {
+        if(!is_dir($dir)) {
+            mkdir($dir);
+        }
         $this->baseStorageDir = $dir;
     }
 
