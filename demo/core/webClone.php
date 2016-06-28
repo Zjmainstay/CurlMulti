@@ -2,7 +2,8 @@
 require_once __DIR__ . '/../../vendor/autoload.php';
 use Ares333\CurlMulti\Core;
 /**
- * 404 link check
+ * 网页抓取
+ * 支持单页抓取、全站抓取、全网抓取（抓取外链）
  * @author Zjmainstay
  */
 class WebClone {
