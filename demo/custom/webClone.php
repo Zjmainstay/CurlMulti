@@ -21,7 +21,8 @@ class WebClone {
         $this->curl = new Core();
         $this->curl->maxTry = 0;    //不需要重复请求
         $this->curl->cbInfo = null;
-        $this->curl->opt    = array(
+        $this->curl->opt    += array(
+            CURLOPT_ENCODING => 'gzip',
             CURLOPT_SSL_VERIFYPEER  => false,
             CURLOPT_SSL_VERIFYPEER  => false,
             CURLOPT_RETURNTRANSFER  => true,
@@ -29,17 +30,17 @@ class WebClone {
         );
         $this->urls[] = rtrim($url, '/');
         $uri = parse_url($url);
-        
+
         if(empty($uri)) {
             exit('Error url.');
         }
-        
+
         if(!empty($uri['port']) && ($uri['port'] != '80') && ($uri['port'] != '443')) {
             $uri['port'] = ":{$uri['port']}";
         } else {
             $uri['port'] = null;
         }
-        
+
         $this->baseUrl = "{$uri['scheme']}://{$uri['host']}{$uri['port']}";
 
         $this->addUrl($url, $url);
@@ -50,17 +51,26 @@ class WebClone {
      * 添加一个新页面
      */
     function addUrl($url, $fromUrl, $callback = false, $args = array()) {
+        echo "Add url: {$url} from {$fromUrl}\n";
         if(!preg_match('#^https?://#i', $url)) return $this->curl;
 
-        #echo "{$url} from {$fromUrl}\n";
+        if(preg_match_all('#[\x7f-\xff]+#', $url, $matches)) {
+            $origUrl = $url;
+            foreach($matches[0] as $key => $val) {
+                $url = str_replace($val, urlencode(mb_convert_encoding($val, 'gbk', "UTF-8")), $url);
+            }
+            echo "Eoncoding url: {$origUrl} to {$url}\n";
+        }
+
+        // echo "{$url} from {$fromUrl}\n";
         if(empty($callback)) {
             $callback = array ($this,'handlePageResult');
         }
 
         $defaultArgs = array (
                     // 这个参数可以一直传递下去
-                    'url' => $url, 
-                    'fromUrl' => $fromUrl, 
+                    'url' => $url,
+                    'fromUrl' => $fromUrl,
                 );
         $args = array_merge($defaultArgs, $args);
 
@@ -74,10 +84,10 @@ class WebClone {
         } catch(Exception $e) {
 
         }
-        
+
         return $this->curl;
     }
-    
+
     /**
      * 普通页面的请求结果处理
      */
@@ -88,15 +98,17 @@ class WebClone {
                 $this->cacheFile($pathInfo, $r['content'], $param);
             }
 
+            echo "OK url: {$param['url']}\n";
+
             //解析js/css/img
             $this->parseAssetsLink($r, $param);
-            
+
             if($this->parseAllPage) {
                 //解析页面其他链接（内链）
                 $this->parsePageLink($r, $param);
             }
         } else {
-            echo "Error Link: {$param['url']} from {$param['fromUrl']}\n";
+            echo "Error url1: {$param['url']} from {$param['fromUrl']}\n";
         }
     }
 
@@ -117,7 +129,7 @@ class WebClone {
 
             if(isset($param['type']) && ($param['type'] === 'css')){
                 $parseOutsiteLink = true;   //js/css加载外链
-                if(preg_match_all ( '/@import\s+url\s*\(\s*(["\'])?(.+)\\1\s*\);/iU', $r['content'], $matches )) {
+                if(preg_match_all ( '/@import\s+url\s*\(\s*(["\'])?([^\'")]+)\\1?\s*\);/iU', $r['content'], $matches )) {
                     $urls = array();
                     foreach ( $matches[2] as $cssUrl ) {
                         $cssUrl = $this->renderUrl($cssUrl, $param['url'], $parseOutsiteLink);
@@ -126,7 +138,7 @@ class WebClone {
                     $this->addAssetsUrl($urls, $param['url'], array('type' => 'css'));
                 }
 
-                if(preg_match_all ( '/:\s*url\s*\(\s*(["\'])?(.+?)\\1\s*\)/i', $r['content'], $matches )) {
+                if(preg_match_all ( '/:[^{:]*\s*url\s*\(\s*(["\'])?([^\'")]+)\\1?\s*\)/i', $r['content'], $matches )) {
                     $urls = array();
                     foreach ( $matches[2] as $cssUrl ) {
                         $cssUrl = $this->renderUrl($cssUrl, $param['url'], $parseOutsiteLink);
@@ -137,7 +149,7 @@ class WebClone {
             }
 
         } else {
-            echo "Error Link: {$param['url']} from {$param['fromUrl']}\n";
+            echo "Error url2: {$param['url']} from {$param['fromUrl']}\n";
         }
     }
 
@@ -153,7 +165,7 @@ class WebClone {
 
         $html = phpQuery::newDocumentHTML ( $r ['content'] );
         $list = $html ['a'];
-        
+
         $urls = array();
         foreach ( $list as $v ) {
             $v = pq ( $v );
@@ -161,20 +173,20 @@ class WebClone {
             if(!empty($url)) $urls[] = $url;
         }
         $urls = $this->filterUrls($urls);
-        
+
         if(empty($urls)) {
             $this->emptyLink ++;
             return false;
         } else {
             $this->emptyLink = 0;
         }
-        
+
         foreach ( $urls as $url ) {
             $this->addUrl($url, $param['url']);
         }
         phpQuery::unloadDocuments();
     }
-    
+
     /**
      * 解析js/css/img
      */
@@ -207,17 +219,41 @@ class WebClone {
         $this->addAssetsUrl($urls, $param['url'], array('type' => 'js'));
 
         //Image
-        $list = $html ['img'];
+        $list = $html ['img,input[type=image]'];
         $urls = array();
         foreach ( $list as $v ) {
             $v = pq ( $v );
-            if(empty($v->attr ( 'src' ))) continue;
-            $url = $this->renderUrl($v->attr ( 'src' ), $param['url'], $parseOutsiteLink);
-            if(!empty($url)) $urls[] = $url;
+            $src = $v->attr ( 'src' );
+            if(empty($src)) {
+                $src = $v->attr ( 'src2' );
+            }
+            if(empty($src)) {
+                $src = $v->attr ( '_src' );
+            }
+            if(empty($src)) continue;
+            $url = $this->renderUrl($src, $param['url'], $parseOutsiteLink);
+
+            if(!empty($url)) {
+                //图片已存在不再采集
+                $pathInfo = $this->parseUrlToPath($url, $param['url']);
+                if(!empty($pathInfo['fullPath']) && file_exists($pathInfo['fullPath'])) {
+                    continue;
+                }
+
+                $urls[] = $url;
+            }
         }
         $this->addAssetsUrl($urls, $param['url'], array('type' => 'img'));
-
         phpQuery::unloadDocuments();
+
+        //inner css img like background: url("img.jpg");
+        if(preg_match_all('/url\s*\(\s*([\'"])?([^\'")]*)\1?\)/i', $r ['content'], $matchCssImgUrls)) {
+            $urls = array();
+            foreach($matchCssImgUrls[2] as $url) {
+                $urls[] = $url;
+            }
+            $this->addAssetsUrl($urls, $param['url'], array('type' => 'img'));
+        }
     }
 
     function addAssetsUrl($urls, $fromUrl, $args = array()) {
@@ -236,14 +272,6 @@ class WebClone {
                 $pathInfo['dir'] = iconv('utf-8', 'gbk//ignore', $pathInfo['dir']);
             }
             mkdir($pathInfo['dir'], 0777, true);
-        }
-
-        if(DIRECTORY_SEPARATOR === '\\') {
-            $pathInfo['fullPath'] = iconv('utf-8', 'gbk//ignore', $pathInfo['fullPath']);
-        }
-
-        if(!preg_match('#\.(html|js|css|jpg|png|jpeg|gif|ico)$#is', $pathInfo['fullPath'])) {
-            $pathInfo['fullPath'] .= '.html';
         }
 
         $data = $this->renderContent($data, $param);
@@ -278,15 +306,15 @@ class WebClone {
 
             if(!preg_match('#\.(html|js|css|jpg|png|jpeg|gif|ico)$#is', $link)) {
                 $linkQuote = preg_quote($link, '#');
-                
+
                 $content = preg_replace("#((?:src|href)\s*=\s*([\"'])?\s*{$linkQuote})\\2#is", '$1.html$2', $content);
             }
         }
         phpQuery::unloadDocuments();
-        
+
         return $content;
     }
-    
+
     /**
      * 链接解析处理
      * @param $url      当前链接
@@ -316,14 +344,16 @@ class WebClone {
             if(($url == '#') || (stripos($url, 'mailto:') !== false) || (stripos($url, 'javascript:') !== false) || (stripos($url, 'data:image') !== false)) {
                 return false;
             }
-            
+
+            if(substr($url, 0, 5) == 'data:') {
+                return $url;
+            }
+
             $url = $refferUrl . '/' . trim($url, '/');
             $url = $this->renderRealUrl($url);
         } else if((stripos($url, $this->baseUrl) === false) && !$parseOutsideLink) {    //外链
             return false;
         }
-
-        var_dump(rtrim($url, '/'));
 
         return rtrim($url, '/');
     }
@@ -361,19 +391,19 @@ class WebClone {
 
         return $url;
     }
-    
+
     /**
      * 过滤已检测链接
      */
     function filterUrls($urls) {
         $urls = array_unique(array_diff($urls, $this->urls));
-        
+
         if(count($urls)) {
             $this->urls = array_merge($this->urls, $urls);
-            
+
             return $urls;
         }
-        
+
         return array();
     }
 
@@ -419,10 +449,18 @@ class WebClone {
 
         $dirname  = rtrim($this->renderPath($this->parseBaseUrlToPath($match[1], $currentBaseUrl)), '/');
 
+        $fullPath = $dirname . '/' . $filename;
+        if(DIRECTORY_SEPARATOR === '\\') {
+            $fullPath = iconv('utf-8', 'gbk//ignore', $fullPath);
+        }
+        if(!preg_match('#\.(html|js|css|jpg|png|jpeg|gif|ico)$#is', $fullPath)) {
+            $fullPath .= '.html';
+        }
+
         return array(
                 'filename'  => $filename,
                 'dir'       => $dirname,
-                'fullPath'  => $dirname . '/' . $filename,
+                'fullPath'  => $fullPath,
             );
     }
 
@@ -494,3 +532,6 @@ $demo->setParseOutsiteLink($parseOutsiteLink);    //设置外链采集标记 1:�
 $demo->setBaseStorageDir(__DIR__ . '/domains');
 $demo->run($argv[1]);
 print_r($demo->getUrls());
+
+
+//bug 页面本身的url() css解析
