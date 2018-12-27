@@ -78,6 +78,9 @@ class WebClone {
         $this->curl->add ( array (
                 'url' => $url,
                 'args' => $args,
+                'opt' => [
+                    CURLOPT_REFERER => $fromUrl,
+                ],
         ), $callback );
 
         try {
